@@ -1,8 +1,88 @@
+# =========================
+# Environment & Secrets
+# =========================
+
 .env
+.env.*
+!.env.example
+
+# Firebase / service-account credentials
 firebase-service-account.json
 *-service-account.json
-*.json
+serviceAccountKey.json
+*firebase*.json
+*credentials*.json
+
+
+# =========================
+# Python / FastAPI
+# =========================
+
 .venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+
+# =========================
+# Flutter / Dart
+# =========================
+
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+coverage/
+
+**/doc/api/
+**/ios/Flutter/.last_build_id
+
+# Flutter symbolication / obfuscation
+app.*.symbols
+app.*.map.json
+
+# Widget Preview
+.widget_preview/
+
+
+# =========================
+# Android / IDE
+# =========================
+
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+*.class
+*.log
+*.swp
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+
+# =========================
+# Miscellaneous
+# =========================
+
 .DS_Store
+.atom/
+.history/
+.svn/
+.swiftpm/
+.build/
+.buildlog/
+migrate_working_dir/
+
+# VS Code
+# Keep this commented if you want to commit shared VS Code settings.
+# .vscode/
