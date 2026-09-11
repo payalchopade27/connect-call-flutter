@@ -50,7 +50,11 @@ class HistoryScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final calls = ref.watch(callHistoryProvider);
+    final historyStream = ref.watch(userCallHistoryStreamProvider);
+    final fallbackCalls = ref.watch(callHistoryProvider);
+    final calls = (historyStream.valueOrNull != null && historyStream.valueOrNull!.isNotEmpty)
+        ? historyStream.valueOrNull!
+        : fallbackCalls;
     final currentUid = ref.watch(currentUserProvider)?.uid ?? '';
 
     return Scaffold(

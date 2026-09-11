@@ -20,7 +20,7 @@ subprojects {
 }
 
 subprojects {
-    afterEvaluate {
+    val configureAndroid = {
         val android = project.extensions.findByName("android")
         if (android != null) {
             try {
@@ -32,6 +32,14 @@ subprojects {
                     method.invoke(android, 35)
                 } catch (_: Throwable) {}
             }
+        }
+    }
+
+    if (project.state.executed) {
+        configureAndroid()
+    } else {
+        project.afterEvaluate {
+            configureAndroid()
         }
     }
 }

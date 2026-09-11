@@ -60,6 +60,28 @@ class CallModel {
       state == CallState.failed ||
       state == CallState.disconnected;
 
+  static DateTime _parseDateTime(dynamic value) {
+    if (value == null) return DateTime.now();
+    if (value is DateTime) return value;
+    try {
+      final dyn = value as dynamic;
+      final date = dyn.toDate();
+      if (date is DateTime) return date;
+    } catch (_) {}
+    return DateTime.tryParse(value.toString()) ?? DateTime.now();
+  }
+
+  static DateTime? _parseNullableDateTime(dynamic value) {
+    if (value == null) return null;
+    if (value is DateTime) return value;
+    try {
+      final dyn = value as dynamic;
+      final date = dyn.toDate();
+      if (date is DateTime) return date;
+    } catch (_) {}
+    return DateTime.tryParse(value.toString());
+  }
+
   Map<String, dynamic> toMap() {
     return {
       'callId': callId,
@@ -69,10 +91,13 @@ class CallModel {
       'receiverName': receiverName,
       'callType': callType.toJson(),
       'state': state.toJson(),
+      'status': state.toJson(),
       'direction': direction.toJson(),
       'startedAt': startedAt.toIso8601String(),
+      'startTime': startedAt.toIso8601String(),
       'connectedAt': connectedAt?.toIso8601String(),
       'endedAt': endedAt?.toIso8601String(),
+      'endTime': endedAt?.toIso8601String(),
       'duration': duration,
       'endReason': endReason.toJson(),
     };
@@ -88,16 +113,10 @@ class CallModel {
       callType: CallType.fromJson(map['callType'] ?? 'audio'),
       state: CallState.fromJson(map['state'] ?? map['status'] ?? 'idle'),
       direction: CallDirection.fromJson(map['direction'] ?? 'outgoing'),
-      startedAt: map['startedAt'] != null
-          ? DateTime.tryParse(map['startedAt'].toString()) ?? DateTime.now()
-          : DateTime.now(),
-      connectedAt: map['connectedAt'] != null
-          ? DateTime.tryParse(map['connectedAt'].toString())
-          : null,
-      endedAt: map['endedAt'] != null
-          ? DateTime.tryParse(map['endedAt'].toString())
-          : null,
-      duration: map['duration'] ?? 0,
+      startedAt: _parseDateTime(map['startedAt'] ?? map['startTime']),
+      connectedAt: _parseNullableDateTime(map['connectedAt']),
+      endedAt: _parseNullableDateTime(map['endedAt'] ?? map['endTime']),
+      duration: map['duration'] is int ? map['duration'] as int : (int.tryParse(map['duration']?.toString() ?? '0') ?? 0),
       endReason: CallEndReason.fromJson(map['endReason'] ?? 'none'),
     );
   }
