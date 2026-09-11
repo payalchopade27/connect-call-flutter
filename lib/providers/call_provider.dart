@@ -123,7 +123,8 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     return true;
   }
 
-  /// Connect the WebSocket signaling service using current authenticated Firebase credentials
+  /// Connect the WebSocket signaling service using current authenticated Firebase credentials.
+  /// Auth token is sent as the first WebSocket message per the frozen contract.
   Future<void> connectSignaling({String? customUrl, String? token, String? uid}) async {
     try {
       final user = _ref.read(currentUserProvider);
@@ -135,7 +136,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
 
       final effectiveToken = token ?? (user != null ? await user.getIdToken() : null) ?? '';
       await _signalingService.connect(
-        serverUrl: customUrl ?? AppConstants.signalingBaseUrl,
+        signalingUrl: customUrl ?? AppConstants.signalingUrl,
         idToken: effectiveToken,
         uid: effectiveUid,
       );
@@ -149,7 +150,8 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     _signalingService.disconnect();
   }
 
-  /// Subscribe to inbound WebSocket messages from SignalingService
+  /// Subscribe to inbound WebSocket messages from SignalingService.
+  /// Auth messages are handled internally by SignalingService and do not reach here.
   void _listenToSignaling() {
     _signalingSubscription?.cancel();
     _signalingSubscription = _signalingService.messageStream.listen(
@@ -160,7 +162,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     );
   }
 
-  /// Process inbound signaling messages
+  /// Process inbound signaling messages (only call-related, auth is handled by service)
   void _handleIncomingSignalingMessage(SignalingMessage message) {
     debugPrint('🔔 [CallNotifier] Processing signaling message: ${message.type} (callId: ${message.callId})');
 
@@ -200,9 +202,8 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     if (state.activeCall != null && state.activeCall!.isActive) {
       debugPrint('⚠️ [CallNotifier] Line busy. Auto-rejecting incoming call ${message.callId}');
       _signalingService.sendReject(
-        callId: message.callId,
-        callerId: message.callerId,
-        receiverId: message.receiverId,
+        callId: message.callId ?? '',
+        toUserId: message.fromUserId ?? '',
         reason: 'busy',
       );
       return;
@@ -211,13 +212,18 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     _cancelTimers();
     _hasRecordedHistory = false;
 
+    // Extract caller UID from the incoming fromUserId field (set by backend)
+    final callerUid = message.fromUserId ?? '';
+    final receiverUid = message.toUserId ?? _signalingService.currentUid ?? '';
+    final incomingCallType = message.callType ?? CallType.audio;
+
     final incomingCall = CallModel(
-      callId: message.callId,
-      callerId: message.callerId,
-      receiverId: message.receiverId,
-      callerName: message.callerName ?? 'Incoming Caller',
-      receiverName: message.receiverName ?? 'Me',
-      callType: message.callType ?? CallType.audio,
+      callId: message.callId ?? '',
+      callerId: callerUid,
+      receiverId: receiverUid,
+      callerName: callerUid, // Will be resolved via UserService if needed
+      receiverName: 'Me',
+      callType: incomingCallType,
       state: CallState.ringing,
       direction: CallDirection.incoming,
       startedAt: DateTime.now(),
@@ -228,7 +234,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
       callState: CallState.ringing,
       durationSeconds: 0,
       isMuted: false,
-      isSpeakerOn: incomingCall.callType == CallType.video,
+      isSpeakerOn: incomingCallType == CallType.video,
       isVideoMuted: false,
       isFrontCamera: true,
     );
@@ -258,7 +264,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
 
     _cancelTimers();
 
-    final isBusy = message.data?['reason'] == 'busy';
+    final isBusy = message.reason == 'busy';
     final targetState = isBusy ? CallState.busy : CallState.rejected;
     final endReason = isBusy ? CallEndReason.busy : CallEndReason.rejected;
 
@@ -309,7 +315,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
   }
 
   void _handleInboundError(SignalingMessage message) {
-    final errorMsg = message.data?['message']?.toString() ?? 'Call signaling error';
+    final errorMsg = message.errorMessage ?? 'Call signaling error';
     debugPrint('❌ [CallNotifier] Call error received: $errorMsg');
     setFailed(errorMsg);
   }
@@ -338,7 +344,8 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
   // CALL FLOW LIFECYCLE
   // ==========================================
 
-  /// Initiate an outgoing call
+  /// Initiate an outgoing call.
+  /// Sends call.invite with toUserId and callType in payload (no callerId per contract).
   void startOutgoingCall({
     required UserModel targetUser,
     required CallType callType,
@@ -375,13 +382,10 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
       isFrontCamera: true,
     );
 
-    // Send call.invite to backend WebSocket
+    // Send call.invite per frozen contract — no callerId, backend derives sender
     _signalingService.sendInvite(
       callId: callId,
-      callerId: currentUser.uid,
-      receiverId: targetUser.uid,
-      callerName: currentUser.name,
-      receiverName: targetUser.name,
+      toUserId: targetUser.uid,
       callType: callType,
     );
 
@@ -428,18 +432,18 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     _startRingingTimeout(isIncoming: true);
   }
 
-  /// Accept incoming call -> transitioning ringing to connecting -> connected
+  /// Accept incoming call -> transitioning ringing to connecting -> connected.
+  /// Sends call.accept to the caller's UID (toUserId = callerId of the incoming call).
   void acceptCall() {
     if (state.activeCall == null) return;
     _cancelRingingTimeout();
 
     if (!_canTransitionTo(CallState.connecting)) return;
 
-    // Send call.accept to backend WebSocket
+    // Per frozen contract: toUserId = the caller (the other party)
     _signalingService.sendAccept(
       callId: state.activeCall!.callId,
-      callerId: state.activeCall!.callerId,
-      receiverId: state.activeCall!.receiverId,
+      toUserId: state.activeCall!.callerId,
     );
 
     setConnecting();
@@ -452,18 +456,18 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     });
   }
 
-  /// Reject call -> transitioning calling/ringing to rejected
+  /// Reject call -> transitioning calling/ringing to rejected.
+  /// Sends call.reject to the other party.
   void rejectCall([String? reason]) {
     if (state.activeCall == null) return;
     _cancelTimers();
 
     if (!_canTransitionTo(CallState.rejected)) return;
 
-    // Send call.reject to backend WebSocket
+    // Per frozen contract: toUserId = the other party
     _signalingService.sendReject(
       callId: state.activeCall!.callId,
-      callerId: state.activeCall!.callerId,
-      receiverId: state.activeCall!.receiverId,
+      toUserId: state.activeCall!.callerId,
       reason: reason,
     );
 
@@ -517,7 +521,8 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     _startDurationTimer();
   }
 
-  /// End active call locally
+  /// End active call locally.
+  /// Sends call.end to the other party per frozen contract.
   void endCall([CallEndReason reason = CallEndReason.userEnded]) {
     _cancelTimers();
 
@@ -530,11 +535,14 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
       return;
     }
 
-    // Send call.end to backend WebSocket
+    // Per frozen contract: toUserId = the other party's UID
+    final otherUserId = state.activeCall!.getPeerUid(
+      _signalingService.currentUid ?? state.activeCall!.callerId,
+    );
+
     _signalingService.sendEnd(
       callId: state.activeCall!.callId,
-      callerId: state.activeCall!.callerId,
-      receiverId: state.activeCall!.receiverId,
+      toUserId: otherUserId,
     );
 
     final updatedCall = state.activeCall!.copyWith(
