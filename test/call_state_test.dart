@@ -5,8 +5,73 @@ import 'package:connect_call/models/call_model.dart';
 import 'package:connect_call/models/user_model.dart';
 import 'package:connect_call/providers/call_provider.dart';
 import 'package:connect_call/providers/history_provider.dart';
+import 'package:connect_call/services/webrtc_service.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+
+class FakeWebRTCService extends WebRTCService {
+  bool isInitialized = false;
+  bool isCleanedUp = false;
+  bool isMuted = false;
+  bool isSpeakerOn = false;
+  String? generatedOfferSdp = 'v=0\r\no=fakeOffer...';
+  String? generatedAnswerSdp = 'v=0\r\no=fakeAnswer...';
+  String? lastRemoteAnswer;
+  String? lastRemoteOffer;
+  final List<dynamic> remoteCandidates = [];
+
+  @override
+  Future<void> initialize({Map<String, dynamic>? iceServers}) async {
+    isInitialized = true;
+  }
+
+  @override
+  Future<String> createOffer() async {
+    return generatedOfferSdp!;
+  }
+
+  @override
+  Future<String> handleOfferAndCreateAnswer(String remoteOfferSdp) async {
+    lastRemoteOffer = remoteOfferSdp;
+    return generatedAnswerSdp!;
+  }
+
+  @override
+  Future<void> handleRemoteAnswer(String remoteAnswerSdp) async {
+    lastRemoteAnswer = remoteAnswerSdp;
+  }
+
+  @override
+  Future<void> addRemoteIceCandidate({
+    required dynamic candidateData,
+    String? sdpMid,
+    int? sdpMLineIndex,
+  }) async {
+    remoteCandidates.add({
+      'candidate': candidateData,
+      'sdpMid': sdpMid,
+      'sdpMLineIndex': sdpMLineIndex,
+    });
+  }
+
+  @override
+  void setMicrophoneMute(bool muted) {
+    isMuted = muted;
+  }
+
+  @override
+  void enableSpeakerphone(bool enable) {
+    isSpeakerOn = enable;
+  }
+
+  @override
+  Future<void> cleanup() async {
+    isCleanedUp = true;
+  }
+}
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('CallModel Peer Identification & State Helpers', () {
     final call = CallModel(
       callId: 'test_call_123',
@@ -45,13 +110,19 @@ void main() {
     });
   });
 
-  group('CallNotifier State Machine & Controls', () {
+  group('CallNotifier WebRTC Audio State Machine & Controls', () {
     late ProviderContainer container;
+    late FakeWebRTCService fakeWebRTC;
     final userMe = UserModel(uid: 'my_uid', name: 'Me', email: 'me@test.com');
     final userPeer = UserModel(uid: 'peer_uid', name: 'Peer User', email: 'peer@test.com');
 
     setUp(() {
-      container = ProviderContainer();
+      fakeWebRTC = FakeWebRTCService();
+      container = ProviderContainer(
+        overrides: [
+          webRTCServiceProvider.overrideWithValue(fakeWebRTC),
+        ],
+      );
     });
 
     tearDown(() {
@@ -68,10 +139,10 @@ void main() {
       expect(state.isFrontCamera, isTrue);
     });
 
-    test('startOutgoingCall sets state to calling and speaker defaults', () {
-      container.read(callProvider.notifier).startOutgoingCall(
+    test('startOutgoingCall sets state to calling and speaker defaults', () async {
+      await container.read(callProvider.notifier).startOutgoingCall(
         targetUser: userPeer,
-        callType: CallType.video,
+        callType: CallType.audio,
         currentUser: userMe,
       );
 
@@ -81,33 +152,39 @@ void main() {
       expect(state.activeCall!.callerId, 'my_uid');
       expect(state.activeCall!.receiverId, 'peer_uid');
       expect(state.activeCall!.getPeerName('my_uid'), 'Peer User');
-      // Video call defaults speaker to true
-      expect(state.isSpeakerOn, isTrue);
+      // Audio call defaults speaker to false
+      expect(state.isSpeakerOn, isFalse);
       expect(state.isMuted, isFalse);
     });
 
-    test('Local controls toggle state without hardware calls', () {
+    test('toggleMute updates state and calls WebRTCService.setMicrophoneMute', () {
       final notifier = container.read(callProvider.notifier);
 
       notifier.toggleMute();
       expect(container.read(callProvider).isMuted, isTrue);
+      expect(fakeWebRTC.isMuted, isTrue);
+
       notifier.toggleMute();
       expect(container.read(callProvider).isMuted, isFalse);
+      expect(fakeWebRTC.isMuted, isFalse);
+    });
+
+    test('toggleSpeaker updates state and calls WebRTCService.enableSpeakerphone', () {
+      final notifier = container.read(callProvider.notifier);
 
       notifier.toggleSpeaker();
       expect(container.read(callProvider).isSpeakerOn, isTrue);
+      expect(fakeWebRTC.isSpeakerOn, isTrue);
 
-      notifier.toggleVideo();
-      expect(container.read(callProvider).isVideoMuted, isTrue);
-
-      notifier.switchCamera();
-      expect(container.read(callProvider).isFrontCamera, isFalse);
+      notifier.toggleSpeaker();
+      expect(container.read(callProvider).isSpeakerOn, isFalse);
+      expect(fakeWebRTC.isSpeakerOn, isFalse);
     });
 
-    test('Outgoing call transition: calling -> connecting -> connected -> ended', () {
+    test('Outgoing call transition: calling -> connecting -> connected -> ended triggers WebRTC cleanup', () async {
       final notifier = container.read(callProvider.notifier);
 
-      notifier.startOutgoingCall(
+      await notifier.startOutgoingCall(
         targetUser: userPeer,
         callType: CallType.audio,
         currentUser: userMe,
@@ -122,6 +199,7 @@ void main() {
 
       notifier.endCall();
       expect(container.read(callProvider).callState, CallState.ended);
+      expect(fakeWebRTC.isCleanedUp, isTrue);
     });
 
     test('Incoming call simulation: ringing -> accept -> connecting -> connected', () async {
@@ -138,18 +216,22 @@ void main() {
       expect(ringingState.callState, CallState.ringing);
       expect(ringingState.activeCall!.getPeerName('my_uid'), 'Peer User');
 
-      notifier.acceptCall();
+      await notifier.acceptCall();
       expect(container.read(callProvider).callState, CallState.connecting);
+      expect(fakeWebRTC.isInitialized, isTrue);
 
-      // Wait for simulated accept delay
-      await Future.delayed(const Duration(milliseconds: 700));
+      // Simulate WebRTC connection established callback
+      fakeWebRTC.onConnectionStateChange?.call(
+        RTCPeerConnectionState.RTCPeerConnectionStateConnected,
+      );
       expect(container.read(callProvider).callState, CallState.connected);
 
       notifier.endCall();
       expect(container.read(callProvider).callState, CallState.ended);
+      expect(fakeWebRTC.isCleanedUp, isTrue);
     });
 
-    test('Incoming call rejection transitions to rejected and records history', () {
+    test('Incoming call rejection transitions to rejected, records history, and cleans up WebRTC', () {
       final initialHistoryCount = container.read(callHistoryProvider).length;
       final notifier = container.read(callProvider.notifier);
 
@@ -162,6 +244,7 @@ void main() {
 
       notifier.rejectCall();
       expect(container.read(callProvider).callState, CallState.rejected);
+      expect(fakeWebRTC.isCleanedUp, isTrue);
 
       final updatedHistory = container.read(callHistoryProvider);
       expect(updatedHistory.length, initialHistoryCount + 1);
@@ -169,11 +252,11 @@ void main() {
       expect(updatedHistory.first.getPeerName('my_uid'), 'Peer User');
     });
 
-    test('Completed call is recorded into call history', () {
+    test('Completed call is recorded into call history and cleans up WebRTC', () async {
       final initialHistoryCount = container.read(callHistoryProvider).length;
       final notifier = container.read(callProvider.notifier);
 
-      notifier.startOutgoingCall(
+      await notifier.startOutgoingCall(
         targetUser: userPeer,
         callType: CallType.audio,
         currentUser: userMe,
@@ -185,6 +268,7 @@ void main() {
       expect(updatedHistory.length, initialHistoryCount + 1);
       expect(updatedHistory.first.state, CallState.ended);
       expect(updatedHistory.first.getPeerName('my_uid'), 'Peer User');
+      expect(fakeWebRTC.isCleanedUp, isTrue);
     });
   });
 }

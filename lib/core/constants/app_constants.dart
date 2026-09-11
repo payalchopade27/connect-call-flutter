@@ -17,6 +17,35 @@ class AppConstants {
   /// Authentication timeout in seconds.
   /// Backend will disconnect if auth message is not received within this window.
   static const int authTimeoutSeconds = 10;
+
+  /// Centralized ICE / STUN servers configuration for WebRTC.
+  /// Development default uses public Google STUN servers.
+  /// Replaceable at runtime or in production with TURN server credentials.
+  static const Map<String, dynamic> defaultIceServers = {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'stun:stun1.l.google.com:19302'},
+      {'urls': 'stun:stun2.l.google.com:19302'},
+    ],
+  };
+
+  /// Active ICE servers configuration (easy to replace with production TURN).
+  static Map<String, dynamic> iceServers = defaultIceServers;
+
+  /// WebRTC audio-only media constraints for getUserMedia
+  static const Map<String, dynamic> audioMediaConstraints = {
+    'audio': true,
+    'video': false,
+  };
+
+  /// WebRTC audio-only SDP constraints for offer/answer
+  static const Map<String, dynamic> audioSdpConstraints = {
+    'mandatory': {
+      'OfferToReceiveAudio': true,
+      'OfferToReceiveVideo': false,
+    },
+    'optional': [],
+  };
 }
 
 /// Call types specified in team contract
