@@ -2,16 +2,11 @@ class AppConstants {
   static const String appName = 'ConnectCall';
   static const String appTagline = 'Seamless HD Audio & Video Calling';
 
-  /// Default WebSocket URL for backend signaling.
-  ///
-  /// NOTE: Replace with your actual FastAPI server host/port.
-  /// - Android emulator loopback: `ws://10.0.2.2:8000/ws/signaling`
-  /// - iOS simulator / desktop: `ws://localhost:8000/ws/signaling`
-  /// - Physical devices: `ws://{YOUR_LAN_IP}:8000/ws/signaling`
-  static const String defaultSignalingUrl = 'ws://10.0.2.2:8000/ws/signaling';
+  /// Production WebSocket signaling endpoint (authoritative).
+  static const String defaultSignalingUrl =
+      'wss://connect-call-flutter.onrender.com/ws/signaling';
 
   /// Active signaling server URL — the single centralized configuration value.
-  /// Change this to point to your backend before running.
   static String signalingUrl = defaultSignalingUrl;
 
   /// Authentication timeout in seconds.
@@ -38,11 +33,30 @@ class AppConstants {
     'video': false,
   };
 
+  /// WebRTC audio+video media constraints for getUserMedia (video calls)
+  static const Map<String, dynamic> videoMediaConstraints = {
+    'audio': true,
+    'video': {
+      'facingMode': 'user',
+      'width': {'ideal': 1280},
+      'height': {'ideal': 720},
+    },
+  };
+
   /// WebRTC audio-only SDP constraints for offer/answer
   static const Map<String, dynamic> audioSdpConstraints = {
     'mandatory': {
       'OfferToReceiveAudio': true,
       'OfferToReceiveVideo': false,
+    },
+    'optional': [],
+  };
+
+  /// WebRTC audio+video SDP constraints for offer/answer (video calls)
+  static const Map<String, dynamic> videoSdpConstraints = {
+    'mandatory': {
+      'OfferToReceiveAudio': true,
+      'OfferToReceiveVideo': true,
     },
     'optional': [],
   };

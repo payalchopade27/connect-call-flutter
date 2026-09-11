@@ -1,8 +1,14 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import '../core/constants/app_constants.dart';
 import '../models/call_model.dart';
 
-/// In-memory call history service with foundation for future Firestore sync
+/// Call history service with in-memory cache and optional Firestore sync
 class CallHistoryService {
+  final FirebaseFirestore? _firestore;
+
+  CallHistoryService([this._firestore]);
+
   final List<CallModel> _history = [
     CallModel(
       callId: 'call_1',
@@ -51,7 +57,53 @@ class CallHistoryService {
   List<CallModel> getMockHistory() => getHistory();
 
   /// Record a newly completed/missed/rejected call to history
-  void addCall(CallModel call) {
+  void addCall(CallModel call, {String? userUid}) {
     _history.insert(0, call);
+
+    // Asynchronously persist to Firestore if available
+    _persistToFirestore(call, userUid: userUid);
+  }
+
+  Future<void> _persistToFirestore(CallModel call, {String? userUid}) async {
+    try {
+      final fs = _firestore ?? FirebaseFirestore.instance;
+      final uid = userUid ??
+          (call.direction == CallDirection.outgoing
+              ? call.callerId
+              : call.receiverId);
+      if (uid.isNotEmpty) {
+        await fs
+            .collection('users')
+            .doc(uid)
+            .collection('calls')
+            .doc(call.callId)
+            .set(call.toMap(), SetOptions(merge: true));
+        debugPrint('✅ [CallHistoryService] Persisted call ${call.callId} to Firestore.');
+      }
+    } catch (e) {
+      // In unit test or offline mode, Firestore may not be available; ignore silently
+      debugPrint('ℹ️ [CallHistoryService] Firestore write skipped/fallback: $e');
+    }
+  }
+
+  /// Stream of call records from Firestore for a given user
+  Stream<List<CallModel>> streamUserCalls(String uid) {
+    try {
+      final fs = _firestore ?? FirebaseFirestore.instance;
+      return fs
+          .collection('users')
+          .doc(uid)
+          .collection('calls')
+          .orderBy('startedAt', descending: true)
+          .snapshots()
+          .map((snapshot) {
+        return snapshot.docs.map((doc) {
+          return CallModel.fromMap(doc.data(), doc.id);
+        }).toList();
+      });
+    } catch (e) {
+      debugPrint('ℹ️ [CallHistoryService] Firestore stream fallback: $e');
+      return Stream.value(getHistory());
+    }
   }
 }

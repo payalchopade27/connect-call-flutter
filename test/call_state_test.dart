@@ -13,6 +13,8 @@ class FakeWebRTCService extends WebRTCService {
   bool isCleanedUp = false;
   bool isMuted = false;
   bool isSpeakerOn = false;
+  bool isVideoMuted = false;
+  bool isCameraFront = true;
   String? generatedOfferSdp = 'v=0\r\no=fakeOffer...';
   String? generatedAnswerSdp = 'v=0\r\no=fakeAnswer...';
   String? lastRemoteAnswer;
@@ -25,12 +27,17 @@ class FakeWebRTCService extends WebRTCService {
   }
 
   @override
-  Future<String> createOffer() async {
+  Future<void> initializeVideo({Map<String, dynamic>? iceServers}) async {
+    isInitialized = true;
+  }
+
+  @override
+  Future<String> createOffer({bool isVideo = false}) async {
     return generatedOfferSdp!;
   }
 
   @override
-  Future<String> handleOfferAndCreateAnswer(String remoteOfferSdp) async {
+  Future<String> handleOfferAndCreateAnswer(String remoteOfferSdp, {bool isVideo = false}) async {
     lastRemoteOffer = remoteOfferSdp;
     return generatedAnswerSdp!;
   }
@@ -56,6 +63,16 @@ class FakeWebRTCService extends WebRTCService {
   @override
   void setMicrophoneMute(bool muted) {
     isMuted = muted;
+  }
+
+  @override
+  void setVideoMute(bool muted) {
+    isVideoMuted = muted;
+  }
+
+  @override
+  Future<void> switchCamera() async {
+    isCameraFront = !isCameraFront;
   }
 
   @override
@@ -268,6 +285,78 @@ void main() {
       expect(updatedHistory.length, initialHistoryCount + 1);
       expect(updatedHistory.first.state, CallState.ended);
       expect(updatedHistory.first.getPeerName('my_uid'), 'Peer User');
+      expect(fakeWebRTC.isCleanedUp, isTrue);
+    });
+
+    test('Video call outgoing sets isSpeakerOn=true and callType=video', () async {
+      final notifier = container.read(callProvider.notifier);
+
+      await notifier.startOutgoingCall(
+        targetUser: userPeer,
+        callType: CallType.video,
+        currentUser: userMe,
+      );
+
+      final state = container.read(callProvider);
+      expect(state.callState, CallState.calling);
+      expect(state.activeCall!.callType, CallType.video);
+      expect(state.isSpeakerOn, isTrue);
+      expect(state.isVideoMuted, isFalse);
+      expect(state.isFrontCamera, isTrue);
+
+      notifier.endCall();
+    });
+
+    test('toggleVideo toggles isVideoMuted and calls WebRTCService.setVideoMute', () {
+      final notifier = container.read(callProvider.notifier);
+
+      expect(container.read(callProvider).isVideoMuted, isFalse);
+      expect(fakeWebRTC.isVideoMuted, isFalse);
+
+      notifier.toggleVideo();
+      expect(container.read(callProvider).isVideoMuted, isTrue);
+      expect(fakeWebRTC.isVideoMuted, isTrue);
+
+      notifier.toggleVideo();
+      expect(container.read(callProvider).isVideoMuted, isFalse);
+      expect(fakeWebRTC.isVideoMuted, isFalse);
+    });
+
+    test('switchCamera toggles isFrontCamera and calls WebRTCService.switchCamera', () async {
+      final notifier = container.read(callProvider.notifier);
+
+      expect(container.read(callProvider).isFrontCamera, isTrue);
+      expect(fakeWebRTC.isCameraFront, isTrue);
+
+      await notifier.switchCamera();
+      expect(container.read(callProvider).isFrontCamera, isFalse);
+      expect(fakeWebRTC.isCameraFront, isFalse);
+
+      await notifier.switchCamera();
+      expect(container.read(callProvider).isFrontCamera, isTrue);
+      expect(fakeWebRTC.isCameraFront, isTrue);
+    });
+
+    test('Incoming video call initializes video WebRTC on accept', () async {
+      final notifier = container.read(callProvider.notifier);
+
+      notifier.receiveIncomingCall(
+        caller: userPeer,
+        callType: CallType.video,
+        currentUid: userMe.uid,
+        currentName: userMe.name,
+      );
+
+      final ringingState = container.read(callProvider);
+      expect(ringingState.callState, CallState.ringing);
+      expect(ringingState.activeCall!.callType, CallType.video);
+      expect(ringingState.isSpeakerOn, isTrue);
+
+      await notifier.acceptCall();
+      expect(container.read(callProvider).callState, CallState.connecting);
+      expect(fakeWebRTC.isInitialized, isTrue);
+
+      notifier.endCall();
       expect(fakeWebRTC.isCleanedUp, isTrue);
     });
   });

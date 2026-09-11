@@ -142,7 +142,35 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
         return false;
       }
     } catch (e) {
-      debugPrint('ℹ️ [CallNotifier] Permission check fallback (e.g. test environment): $e');
+      debugPrint('ℹ️ [CallNotifier] Mic permission check fallback (e.g. test environment): $e');
+      return true;
+    }
+  }
+
+  /// Request both microphone and camera permissions before starting/answering a video call.
+  Future<bool> _checkVideoPermissions() async {
+    try {
+      final micStatus = await Permission.microphone.request();
+      final cameraStatus = await Permission.camera.request();
+
+      if (micStatus.isPermanentlyDenied || cameraStatus.isPermanentlyDenied) {
+        setFailed(
+          'Camera/microphone permission is permanently denied. '
+          'Please enable it in device settings.',
+        );
+        return false;
+      }
+      if (!micStatus.isGranted) {
+        setFailed('Microphone permission is required for video calling.');
+        return false;
+      }
+      if (!cameraStatus.isGranted) {
+        setFailed('Camera permission is required for video calling.');
+        return false;
+      }
+      return true;
+    } catch (e) {
+      debugPrint('ℹ️ [CallNotifier] Camera permission check fallback: $e');
       return true;
     }
   }
@@ -186,7 +214,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
   }
 
   /// Wire up WebRTCService callbacks for ICE candidates, connection states, and errors.
-  void _setupWebRTCCallbacks() {
+  void _setupWebRTCCallbacks({bool isVideo = false}) {
     _webrtcService.onLocalIceCandidate = (RTCIceCandidate candidate) {
       if (state.activeCall == null) return;
       final targetUserId = state.activeCall!.getPeerUid(
@@ -265,7 +293,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
         break;
 
       default:
-        debugPrint('ℹ️ [CallNotifier] Unhandled or future signaling message type: ${message.type}');
+        debugPrint('ℹ️ [CallNotifier] Unhandled signaling message type: ${message.type}');
         break;
     }
   }
@@ -326,13 +354,19 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
       _cancelRingingTimeout();
       setConnecting();
 
+      final isVideo = state.activeCall!.callType == CallType.video;
+
       try {
-        _setupWebRTCCallbacks();
+        _setupWebRTCCallbacks(isVideo: isVideo);
         if (_webrtcService.peerConnection == null) {
-          await _webrtcService.initialize();
+          if (isVideo) {
+            await _webrtcService.initializeVideo();
+          } else {
+            await _webrtcService.initialize();
+          }
         }
 
-        final offerSdp = await _webrtcService.createOffer();
+        final offerSdp = await _webrtcService.createOffer(isVideo: isVideo);
         final otherUserId = state.activeCall!.getPeerUid(
           _signalingService.currentUid ?? state.activeCall!.callerId,
         );
@@ -367,13 +401,22 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
       return;
     }
 
+    final isVideo = state.activeCall!.callType == CallType.video;
+
     try {
-      _setupWebRTCCallbacks();
+      _setupWebRTCCallbacks(isVideo: isVideo);
       if (_webrtcService.peerConnection == null) {
-        await _webrtcService.initialize();
+        if (isVideo) {
+          await _webrtcService.initializeVideo();
+        } else {
+          await _webrtcService.initialize();
+        }
       }
 
-      final answerSdp = await _webrtcService.handleOfferAndCreateAnswer(offerSdp);
+      final answerSdp = await _webrtcService.handleOfferAndCreateAnswer(
+        offerSdp,
+        isVideo: isVideo,
+      );
       final otherUserId = state.activeCall!.getPeerUid(
         _signalingService.currentUid ?? state.activeCall!.callerId,
       );
@@ -491,7 +534,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
   }
 
   // ==========================================
-  // LOCAL CALL CONTROLS (Hooked to WebRTC audio)
+  // LOCAL CALL CONTROLS (Hooked to WebRTC)
   // ==========================================
 
   void toggleMute() {
@@ -506,11 +549,16 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     state = state.copyWith(isSpeakerOn: newSpeaker);
   }
 
+  /// Toggle local camera video track on/off.
   void toggleVideo() {
-    state = state.copyWith(isVideoMuted: !state.isVideoMuted);
+    final newVideoMuted = !state.isVideoMuted;
+    _webrtcService.setVideoMute(newVideoMuted);
+    state = state.copyWith(isVideoMuted: newVideoMuted);
   }
 
-  void switchCamera() {
+  /// Switch between front and rear camera.
+  Future<void> switchCamera() async {
+    await _webrtcService.switchCamera();
     state = state.copyWith(isFrontCamera: !state.isFrontCamera);
   }
 
@@ -518,8 +566,8 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
   // CALL FLOW LIFECYCLE
   // ==========================================
 
-  /// Initiate an outgoing audio call.
-  /// Checks microphone permissions, creates UUID callId, and sends call.invite.
+  /// Initiate an outgoing call (audio or video).
+  /// Checks required permissions, creates UUID callId, and sends call.invite.
   Future<void> startOutgoingCall({
     required UserModel targetUser,
     required CallType callType,
@@ -528,8 +576,10 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     _cancelTimers();
     _hasRecordedHistory = false;
 
-    // 1. Verify microphone permission before initiating call
-    final hasPermission = await _checkMicrophonePermission();
+    // 1. Check required permissions based on call type
+    final bool hasPermission = callType == CallType.video
+        ? await _checkVideoPermissions()
+        : await _checkMicrophonePermission();
     if (!hasPermission) return;
 
     if (!_canTransitionTo(CallState.calling)) {
@@ -609,15 +659,19 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     _startRingingTimeout(isIncoming: true);
   }
 
-  /// Accept incoming call -> checks microphone permission, sends call.accept, and initializes WebRTC.
+  /// Accept incoming call -> checks permissions, sends call.accept, and initializes WebRTC.
   Future<void> acceptCall() async {
     if (state.activeCall == null) return;
     _cancelRingingTimeout();
 
     if (!_canTransitionTo(CallState.connecting)) return;
 
-    // 1. Verify microphone permission
-    final hasPermission = await _checkMicrophonePermission();
+    final isVideo = state.activeCall!.callType == CallType.video;
+
+    // 1. Verify permissions (camera + mic for video, mic only for audio)
+    final bool hasPermission = isVideo
+        ? await _checkVideoPermissions()
+        : await _checkMicrophonePermission();
     if (!hasPermission) {
       rejectCall('permission_denied');
       return;
@@ -631,10 +685,14 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
 
     setConnecting();
 
-    // 3. Initialize WebRTC audio engine on callee
+    // 3. Initialize appropriate WebRTC engine on callee side
     try {
-      _setupWebRTCCallbacks();
-      await _webrtcService.initialize();
+      _setupWebRTCCallbacks(isVideo: isVideo);
+      if (isVideo) {
+        await _webrtcService.initializeVideo();
+      } else {
+        await _webrtcService.initialize();
+      }
     } catch (e) {
       debugPrint('❌ [CallNotifier] Error initializing WebRTC on accept: $e');
       // Dev/test environment fallback
@@ -711,7 +769,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     _startDurationTimer();
   }
 
-  /// End active call locally -> sends call.end, releases audio hardware, cleans up WebRTC.
+  /// End active call locally -> sends call.end, releases hardware, cleans up WebRTC.
   void endCall([CallEndReason reason = CallEndReason.userEnded]) {
     _cancelTimers();
     _webrtcService.cleanup();
@@ -875,7 +933,8 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
   void _recordCallToHistory(CallModel call) {
     if (_hasRecordedHistory) return;
     _hasRecordedHistory = true;
-    _ref.read(callHistoryNotifierProvider.notifier).addCallRecord(call);
+    final currentUid = _signalingService.currentUid ?? _ref.read(currentUserProvider)?.uid;
+    _ref.read(callHistoryNotifierProvider.notifier).addCallRecord(call, userUid: currentUid);
   }
 
   void _scheduleCleanup() {

@@ -35,10 +35,15 @@ class AudioCallScreen extends ConsumerWidget {
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: const Text(
-                  'AUDIO CALL IN PROGRESS',
+                child: Text(
+                  callState.errorMessage != null
+                      ? callState.errorMessage!
+                      : 'AUDIO CALL IN PROGRESS',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: AppColors.callGreen,
+                    color: callState.errorMessage != null
+                        ? AppColors.callRed
+                        : AppColors.callGreen,
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 1.2,

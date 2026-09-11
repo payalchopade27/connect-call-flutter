@@ -75,6 +75,8 @@ class FakeWebRTCService extends WebRTCService {
   bool isCleanedUp = false;
   bool isMuted = false;
   bool isSpeakerOn = false;
+  bool isVideoMuted = false;
+  bool isCameraFront = true;
   String? generatedOfferSdp = 'v=0\r\no=testOffer...';
   String? generatedAnswerSdp = 'v=0\r\no=testAnswer...';
   String? lastRemoteAnswer;
@@ -87,12 +89,17 @@ class FakeWebRTCService extends WebRTCService {
   }
 
   @override
-  Future<String> createOffer() async {
+  Future<void> initializeVideo({Map<String, dynamic>? iceServers}) async {
+    isInitialized = true;
+  }
+
+  @override
+  Future<String> createOffer({bool isVideo = false}) async {
     return generatedOfferSdp!;
   }
 
   @override
-  Future<String> handleOfferAndCreateAnswer(String remoteOfferSdp) async {
+  Future<String> handleOfferAndCreateAnswer(String remoteOfferSdp, {bool isVideo = false}) async {
     lastRemoteOffer = remoteOfferSdp;
     return generatedAnswerSdp!;
   }
@@ -118,6 +125,16 @@ class FakeWebRTCService extends WebRTCService {
   @override
   void setMicrophoneMute(bool muted) {
     isMuted = muted;
+  }
+
+  @override
+  void setVideoMute(bool muted) {
+    isVideoMuted = muted;
+  }
+
+  @override
+  Future<void> switchCamera() async {
+    isCameraFront = !isCameraFront;
   }
 
   @override

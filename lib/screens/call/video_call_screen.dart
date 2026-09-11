@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../core/constants/app_colors.dart';
+import '../../core/constants/app_constants.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
 
@@ -20,107 +22,202 @@ class VideoCallScreen extends ConsumerWidget {
     final currentUid = ref.watch(currentUserProvider)?.uid ?? '';
     final peerName = activeCall?.getPeerName(currentUid) ?? 'Peer';
 
+    final webrtcService = ref.watch(webRTCServiceProvider);
+    final localRenderer = webrtcService.localRenderer;
+    final remoteRenderer = webrtcService.remoteRenderer;
+
+    final hasRemoteVideo = remoteRenderer != null && remoteRenderer.srcObject != null;
+    final hasLocalVideo = localRenderer != null &&
+        localRenderer.srcObject != null &&
+        !callState.isVideoMuted;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Stack(
           children: [
-            // Remote Video Placeholder (Full Screen Shell)
-            Container(
-              color: AppColors.surface,
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircleAvatar(
-                      radius: 48,
-                      backgroundColor: AppColors.primary,
-                      child: Text(
-                        peerName.isNotEmpty ? peerName[0].toUpperCase() : 'U',
-                        style: const TextStyle(fontSize: 36, color: Colors.white, fontWeight: FontWeight.bold),
+            // 1. Remote Video View (Full Screen) or Fallback Placeholder
+            Positioned.fill(
+              child: hasRemoteVideo
+                  ? RTCVideoView(
+                      remoteRenderer,
+                      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                    )
+                  : Container(
+                      color: AppColors.surface,
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircleAvatar(
+                              radius: 52,
+                              backgroundColor: AppColors.primary,
+                              child: Text(
+                                peerName.isNotEmpty ? peerName[0].toUpperCase() : 'U',
+                                style: const TextStyle(
+                                  fontSize: 40,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              peerName,
+                              style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              callState.callState == CallState.connected
+                                  ? 'Connected • Camera Off'
+                                  : 'Connecting video...',
+                              style: const TextStyle(
+                                color: AppColors.primaryLight,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      peerName,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      '📹 Remote WebRTC Video Stream Placeholder',
-                      style: TextStyle(color: AppColors.primaryLight, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
             ),
 
-            // Local Video Preview Placeholder (Picture-in-Picture Shell in top right)
+            // 2. Local Video Preview (Picture-in-Picture Shell in top right)
             Positioned(
               top: 16,
               right: 16,
               child: Container(
                 width: 110,
-                height: 150,
+                height: 155,
                 decoration: BoxDecoration(
                   color: AppColors.background,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: callState.isVideoMuted ? AppColors.callRed : AppColors.primaryLight,
+                    color: callState.isVideoMuted
+                        ? AppColors.callRed
+                        : AppColors.primaryLight,
                     width: 1.5,
                   ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 8,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        callState.isVideoMuted ? Icons.videocam_off : Icons.camera_alt,
-                        color: callState.isVideoMuted ? AppColors.callRed : Colors.white70,
-                        size: 24,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        callState.isVideoMuted
-                            ? 'Video Muted'
-                            : (callState.isFrontCamera ? 'Front Cam' : 'Rear Cam'),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70, fontSize: 11),
-                      ),
-                    ],
-                  ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: hasLocalVideo
+                      ? RTCVideoView(
+                          localRenderer,
+                          mirror: callState.isFrontCamera,
+                          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                        )
+                      : Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                callState.isVideoMuted
+                                    ? Icons.videocam_off
+                                    : Icons.camera_alt,
+                                color: callState.isVideoMuted
+                                    ? AppColors.callRed
+                                    : Colors.white70,
+                                size: 24,
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                callState.isVideoMuted
+                                    ? 'Video Off'
+                                    : (callState.isFrontCamera
+                                        ? 'Front Cam'
+                                        : 'Rear Cam'),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                 ),
               ),
             ),
 
-            // Top Status & Duration Bar
+            // 3. Top Status & Duration Bar
             Positioned(
               top: 20,
               left: 20,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.6),
+                  color: Colors.black.withValues(alpha: 0.65),
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Text(
-                  _formatDuration(callState.durationSeconds),
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: AppColors.callGreen,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _formatDuration(callState.durationSeconds),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
 
-            // Bottom Action Control Bar
+            // 4. Optional Error Banner Overlay
+            if (callState.errorMessage != null)
+              Positioned(
+                top: 70,
+                left: 20,
+                right: 20,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.callRed.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    callState.errorMessage!,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+
+            // 5. Bottom Action Control Bar
             Positioned(
               bottom: 32,
               left: 20,
               right: 20,
               child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                 decoration: BoxDecoration(
                   color: Colors.black.withValues(alpha: 0.8),
                   borderRadius: BorderRadius.circular(32),
@@ -128,7 +225,7 @@ class VideoCallScreen extends ConsumerWidget {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    // Mute Button
+                    // Mute Microphone Button
                     IconButton(
                       icon: Icon(
                         callState.isMuted ? Icons.mic_off : Icons.mic,
@@ -137,14 +234,16 @@ class VideoCallScreen extends ConsumerWidget {
                       onPressed: () {
                         ref.read(callProvider.notifier).toggleMute();
                       },
-                      tooltip: callState.isMuted ? 'Unmute Microphone' : 'Mute Microphone',
+                      tooltip: callState.isMuted ? 'Unmute' : 'Mute',
                     ),
 
                     // Switch Camera Button
                     IconButton(
                       icon: Icon(
                         Icons.cameraswitch,
-                        color: callState.isFrontCamera ? Colors.white : AppColors.primaryLight,
+                        color: callState.isFrontCamera
+                            ? Colors.white
+                            : AppColors.primaryLight,
                       ),
                       onPressed: () {
                         ref.read(callProvider.notifier).switchCamera();
@@ -152,16 +251,36 @@ class VideoCallScreen extends ConsumerWidget {
                       tooltip: 'Switch Camera',
                     ),
 
+                    // Speakerphone Button
+                    IconButton(
+                      icon: Icon(
+                        callState.isSpeakerOn ? Icons.volume_up : Icons.volume_off,
+                        color: callState.isSpeakerOn
+                            ? AppColors.primaryLight
+                            : Colors.white70,
+                      ),
+                      onPressed: () {
+                        ref.read(callProvider.notifier).toggleSpeaker();
+                      },
+                      tooltip: callState.isSpeakerOn
+                          ? 'Speakerphone On'
+                          : 'Speakerphone Off',
+                    ),
+
                     // Toggle Video Button
                     IconButton(
                       icon: Icon(
                         callState.isVideoMuted ? Icons.videocam_off : Icons.videocam,
-                        color: callState.isVideoMuted ? AppColors.callRed : Colors.white,
+                        color: callState.isVideoMuted
+                            ? AppColors.callRed
+                            : Colors.white,
                       ),
                       onPressed: () {
                         ref.read(callProvider.notifier).toggleVideo();
                       },
-                      tooltip: callState.isVideoMuted ? 'Turn Camera On' : 'Turn Camera Off',
+                      tooltip: callState.isVideoMuted
+                          ? 'Turn Camera On'
+                          : 'Turn Camera Off',
                     ),
 
                     // End Call Button
@@ -170,12 +289,12 @@ class VideoCallScreen extends ConsumerWidget {
                         ref.read(callProvider.notifier).endCall();
                       },
                       child: Container(
-                        padding: const EdgeInsets.all(14),
+                        padding: const EdgeInsets.all(12),
                         decoration: const BoxDecoration(
                           color: AppColors.callRed,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.call_end, color: Colors.white),
+                        child: const Icon(Icons.call_end, color: Colors.white, size: 24),
                       ),
                     ),
                   ],
