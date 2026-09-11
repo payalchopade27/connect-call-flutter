@@ -1,17 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/constants/app_constants.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/call_provider.dart';
+import '../call/call_screen.dart';
 import 'home_screen.dart';
 import '../contacts/contacts_screen.dart';
 import '../history/history_screen.dart';
 import '../profile/profile_screen.dart';
 
-class MainNavigationScreen extends StatefulWidget {
+class MainNavigationScreen extends ConsumerStatefulWidget {
   const MainNavigationScreen({super.key});
 
   @override
-  State<MainNavigationScreen> createState() => _MainNavigationScreenState();
+  ConsumerState<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends State<MainNavigationScreen> {
+class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
   int _selectedIndex = 0;
 
   final List<Widget> _pages = const [
@@ -22,7 +27,35 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(callProvider.notifier).connectSignaling();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Automatically open CallScreen when an incoming call arrives
+    ref.listen<ActiveCallState>(callProvider, (previous, next) {
+      if (previous?.callState != CallState.ringing &&
+          next.callState == CallState.ringing &&
+          next.activeCall?.direction == CallDirection.incoming) {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const CallScreen()),
+        );
+      }
+    });
+
+    // Reconnect/disconnect signaling when authentication state changes
+    ref.listen(currentUserProvider, (previous, next) {
+      if (next == null) {
+        ref.read(callProvider.notifier).disconnectSignaling();
+      } else if (previous?.uid != next.uid) {
+        ref.read(callProvider.notifier).connectSignaling();
+      }
+    });
+
     return Scaffold(
       body: IndexedStack(
         index: _selectedIndex,
