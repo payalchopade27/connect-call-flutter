@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
 import '../../providers/auth_provider.dart';
@@ -29,8 +30,12 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(callProvider.notifier).connectSignaling();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        await ref.read(callProvider.notifier).connectSignaling();
+      } catch (e) {
+        debugPrint('⚠️ [MainNavigationScreen] Failed to connect signaling: $e');
+      }
     });
   }
 
