@@ -1,0 +1,1 @@
+"""ConnectCall backend application package."""
