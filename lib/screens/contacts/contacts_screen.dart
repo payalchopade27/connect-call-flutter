@@ -39,31 +39,6 @@ class ContactsScreen extends ConsumerWidget {
     );
   }
 
-  void _simulateIncomingCall(BuildContext context, WidgetRef ref) {
-    final currentProfile = ref.read(currentProfileProvider).value;
-    final fallbackAuth = ref.read(currentUserProvider);
-    final currentUid = currentProfile?.uid ?? fallbackAuth?.uid ?? 'me';
-    final currentName = currentProfile?.name ?? fallbackAuth?.displayName ?? 'Me';
-
-    final mockCaller = UserModel(
-      uid: 'user_caller_sim',
-      name: 'Simulated Caller (Person 1)',
-      email: 'person1@connectcall.com',
-      isOnline: true,
-    );
-
-    ref.read(callProvider.notifier).receiveIncomingCall(
-          caller: mockCaller,
-          callType: CallType.audio,
-          currentUid: currentUid,
-          currentName: currentName,
-        );
-
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const CallScreen()),
-    );
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final filteredUsersAsync = ref.watch(filteredUsersProvider);
@@ -72,13 +47,6 @@ class ContactsScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Contacts & Search'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.ring_volume, color: AppColors.primaryLight),
-            tooltip: 'Simulate Incoming Call',
-            onPressed: () => _simulateIncomingCall(context, ref),
-          ),
-        ],
       ),
       body: Column(
         children: [

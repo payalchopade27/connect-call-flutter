@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -12,6 +13,7 @@ import '../services/signaling_service.dart';
 import '../services/webrtc_service.dart';
 import 'auth_provider.dart';
 import 'history_provider.dart';
+import 'users_provider.dart';
 
 class ActiveCallState {
   final CallModel? activeCall;
@@ -74,6 +76,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
         _webrtcService = _ref.read(webRTCServiceProvider),
         super(ActiveCallState()) {
     _listenToSignaling();
+    _signalingService.onReconnectRequested = () => connectSignaling();
   }
 
   /// Default timeout for unanswered incoming or outgoing calls (30 seconds)
@@ -179,7 +182,9 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
   /// Auth token is sent as the first WebSocket message per the frozen contract.
   Future<void> connectSignaling({String? customUrl, String? token, String? uid}) async {
     try {
-      final user = _ref.read(currentUserProvider);
+      // Fallback directly to FirebaseAuth.instance.currentUser if currentUserProvider
+      // hasn't emitted its first value yet on app start.
+      final user = _ref.read(currentUserProvider) ?? FirebaseAuth.instance.currentUser;
       final effectiveUid = uid ?? user?.uid;
       if (effectiveUid == null || effectiveUid.isEmpty) {
         debugPrint('ℹ️ [CallNotifier] Cannot connect signaling: no user UID available.');
@@ -187,6 +192,11 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
       }
 
       final effectiveToken = token ?? (user != null ? await user.getIdToken() : null) ?? '';
+      if (effectiveToken.isEmpty) {
+        debugPrint('ℹ️ [CallNotifier] Cannot connect signaling: empty ID token.');
+        return;
+      }
+
       await _signalingService.connect(
         signalingUrl: customUrl ?? AppConstants.signalingUrl,
         idToken: effectiveToken,
@@ -341,6 +351,23 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     );
 
     _startRingingTimeout(isIncoming: true);
+
+    // Asynchronously resolve caller's real display name from Firestore
+    _resolveCallerName(callerUid, incomingCall.callId);
+  }
+
+  Future<void> _resolveCallerName(String callerUid, String callId) async {
+    try {
+      final user = await _ref.read(userServiceProvider).getUserProfileOnce(callerUid);
+      if (user != null && user.name.isNotEmpty && mounted) {
+        if (state.activeCall?.callId == callId) {
+          final updated = state.activeCall!.copyWith(callerName: user.name);
+          state = state.copyWith(activeCall: updated);
+        }
+      }
+    } catch (e) {
+      debugPrint('ℹ️ [CallNotifier] Could not resolve caller display name: $e');
+    }
   }
 
   /// Caller side: Callee accepted the call -> initialize WebRTC and send SDP offer.
@@ -378,12 +405,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
         );
       } catch (e) {
         debugPrint('❌ [CallNotifier] Failed to create WebRTC offer on accept: $e');
-        // Fallback simulation support if WebRTC native library is uninitialized in test
-        Future.delayed(const Duration(milliseconds: 600), () {
-          if (mounted && state.callState == CallState.connecting) {
-            setConnected();
-          }
-        });
+        setFailed('WebRTC initialization failed. Please check microphone permissions and try again.');
       }
     }
   }
@@ -528,9 +550,21 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
 
   void _handleInboundError(SignalingMessage message) {
     final errorMsg = message.errorMessage ?? 'Call signaling error';
-    debugPrint('❌ [CallNotifier] Call error received: $errorMsg');
-    _webrtcService.cleanup();
-    setFailed(errorMsg);
+    debugPrint('❌ [CallNotifier] Call error received: $errorMsg (code: ${message.errorCode}, callId: ${message.callId})');
+
+    // Only fail the call if an active call exists and matches the error
+    if (state.activeCall != null) {
+      if (message.callId == null ||
+          message.callId!.isEmpty ||
+          message.callId == state.activeCall!.callId) {
+        _webrtcService.cleanup();
+        setFailed(errorMsg);
+      } else {
+        debugPrint('ℹ️ [CallNotifier] Ignoring call error for other callId: ${message.callId}');
+      }
+    } else {
+      debugPrint('ℹ️ [CallNotifier] Ignoring call error while idle: $errorMsg');
+    }
   }
 
   // ==========================================
@@ -695,12 +729,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
       }
     } catch (e) {
       debugPrint('❌ [CallNotifier] Error initializing WebRTC on accept: $e');
-      // Dev/test environment fallback
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted && state.callState == CallState.connecting) {
-          setConnected();
-        }
-      });
+      setFailed('Failed to access microphone/camera. Please grant permissions and try again.');
     }
   }
 
@@ -853,24 +882,7 @@ class CallNotifier extends StateNotifier<ActiveCallState> {
     _scheduleCleanup();
   }
 
-  /// Dev simulation helper: simulate peer accepting an outgoing call
-  void simulatePeerAccept() {
-    if (state.callState == CallState.calling || state.callState == CallState.ringing) {
-      setConnecting();
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted && state.callState == CallState.connecting) {
-          setConnected();
-        }
-      });
-    }
-  }
 
-  /// Dev simulation helper: simulate peer rejecting an outgoing call
-  void simulatePeerReject() {
-    if (state.callState == CallState.calling || state.callState == CallState.ringing) {
-      rejectCall();
-    }
-  }
 
   // ==========================================
   // TIMERS & INTERNAL HELPERS
@@ -974,4 +986,10 @@ final webRTCServiceProvider = Provider<WebRTCService>((ref) {
 
 final callProvider = StateNotifierProvider<CallNotifier, ActiveCallState>((ref) {
   return CallNotifier(ref);
+});
+
+/// StreamProvider exposing the live WebSocket signaling connection state
+final signalingConnectionStateProvider = StreamProvider<SignalingConnectionState>((ref) {
+  final service = ref.watch(signalingServiceProvider);
+  return service.connectionStateStream;
 });

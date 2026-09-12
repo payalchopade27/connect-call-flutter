@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/io.dart';
 import '../core/constants/app_constants.dart';
 import '../models/signaling_message.dart';
 
@@ -33,6 +35,12 @@ class SignalingService {
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   Timer? _authTimeoutTimer;
+  Timer? _reconnectTimer;
+  int _reconnectAttempts = 0;
+  bool _isExplicitDisconnect = false;
+
+  /// Callback registered by CallNotifier to trigger a fresh connect with fresh Firebase token.
+  VoidCallback? onReconnectRequested;
 
   final StreamController<SignalingMessage> _messageController =
       StreamController<SignalingMessage>.broadcast();
@@ -89,8 +97,12 @@ class SignalingService {
       return;
     }
 
-    // Clean up existing connection before reconnecting
-    disconnect();
+    // Clean up existing channel before reconnecting without marking explicit disconnect
+    _cancelAuthTimeout();
+    _cleanupChannel();
+
+    _isExplicitDisconnect = false;
+    _cancelReconnectTimer();
 
     _currentUid = uid;
     _updateState(SignalingConnectionState.connecting);
@@ -99,7 +111,19 @@ class SignalingService {
       final uri = Uri.parse(signalingUrl);
       debugPrint('🌐 [SignalingService] Connecting to WebSocket: ${uri.scheme}://${uri.host}:${uri.port}${uri.path} for UID: $uid');
 
-      _channel = customChannel ?? WebSocketChannel.connect(uri);
+      if (customChannel != null) {
+        _channel = customChannel;
+      } else if (kIsWeb) {
+        _channel = WebSocketChannel.connect(uri);
+      } else {
+        // Use IOWebSocketChannel with native transport-level RFC 6455 pingInterval.
+        // This keeps Render.com and intermediate proxies alive WITHOUT sending
+        // invalid JSON messages to the application dispatcher.
+        _channel = IOWebSocketChannel.connect(
+          uri,
+          pingInterval: const Duration(seconds: 20),
+        );
+      }
 
       _subscription = _channel!.stream.listen(
         (data) {
@@ -109,12 +133,14 @@ class SignalingService {
           debugPrint('⚠️ [SignalingService] WebSocket error: $error');
           _updateState(SignalingConnectionState.error);
           _cleanupChannel();
+          _scheduleReconnect();
         },
         onDone: () {
           debugPrint('🔌 [SignalingService] WebSocket connection closed.');
           _cancelAuthTimeout();
           _updateState(SignalingConnectionState.disconnected);
           _cleanupChannel();
+          _scheduleReconnect();
         },
         cancelOnError: false,
       );
@@ -133,6 +159,7 @@ class SignalingService {
       debugPrint('❌ [SignalingService] Connection failed: $e');
       _updateState(SignalingConnectionState.error);
       _cleanupChannel();
+      _scheduleReconnect();
     }
   }
 
@@ -168,6 +195,8 @@ class SignalingService {
 
   void _handleAuthSuccess(SignalingMessage message) {
     _cancelAuthTimeout();
+    _reconnectAttempts = 0;
+    _cancelReconnectTimer();
 
     _verifiedUserId = message.verifiedUserId ?? _currentUid;
     _updateState(SignalingConnectionState.authenticated);
@@ -176,6 +205,7 @@ class SignalingService {
 
   void _handleAuthError(SignalingMessage message) {
     _cancelAuthTimeout();
+    _cancelReconnectTimer();
 
     final code = message.errorCode ?? 'UNKNOWN';
     final errorMsg = message.errorMessage ?? 'Authentication failed';
@@ -183,6 +213,7 @@ class SignalingService {
 
     _updateState(SignalingConnectionState.error);
     _cleanupChannel();
+    // Do not auto-reconnect on auth error immediately to prevent auth spamming
   }
 
   void _startAuthTimeout() {
@@ -194,6 +225,7 @@ class SignalingService {
           debugPrint('⏰ [SignalingService] Auth timeout after ${authTimeoutDuration.inSeconds}s');
           _updateState(SignalingConnectionState.error);
           _cleanupChannel();
+          _scheduleReconnect();
         }
       },
     );
@@ -333,11 +365,36 @@ class SignalingService {
 
   /// Disconnect the WebSocket signaling connection.
   void disconnect() {
+    _isExplicitDisconnect = true;
+    _cancelReconnectTimer();
+    _reconnectAttempts = 0;
     _cancelAuthTimeout();
     _cleanupChannel();
     _currentUid = null;
     _verifiedUserId = null;
     _updateState(SignalingConnectionState.disconnected);
+  }
+
+  void _scheduleReconnect() {
+    if (_isExplicitDisconnect || onReconnectRequested == null) return;
+    _cancelReconnectTimer();
+
+    // Exponential backoff: 2s, 4s, 8s, up to max 30s
+    final delaySeconds = math.min(30, math.pow(2, _reconnectAttempts + 1).toInt());
+    _reconnectAttempts++;
+
+    debugPrint('🔄 [SignalingService] Scheduling reconnect attempt $_reconnectAttempts in ${delaySeconds}s...');
+    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () {
+      if (!_isExplicitDisconnect && _connectionState != SignalingConnectionState.authenticated) {
+        debugPrint('🔄 [SignalingService] Executing auto-reconnect attempt $_reconnectAttempts...');
+        onReconnectRequested?.call();
+      }
+    });
+  }
+
+  void _cancelReconnectTimer() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
   }
 
   void _cleanupChannel() {

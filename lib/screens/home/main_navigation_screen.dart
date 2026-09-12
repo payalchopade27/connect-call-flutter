@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
+import '../../services/signaling_service.dart';
 import '../call/call_screen.dart';
 import 'home_screen.dart';
 import '../contacts/contacts_screen.dart';
@@ -16,7 +18,8 @@ class MainNavigationScreen extends ConsumerStatefulWidget {
   ConsumerState<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
+class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen>
+    with WidgetsBindingObserver {
   int _selectedIndex = 0;
 
   final List<Widget> _pages = const [
@@ -29,6 +32,7 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         await ref.read(callProvider.notifier).connectSignaling();
@@ -36,6 +40,21 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
         debugPrint('⚠️ [MainNavigationScreen] Failed to connect signaling: $e');
       }
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Reconnect signaling automatically when user unlocks screen or returns to app
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('📱 [MainNavigationScreen] App resumed. Ensuring signaling connection...');
+      ref.read(callProvider.notifier).connectSignaling();
+    }
   }
 
   @override
@@ -60,10 +79,83 @@ class _MainNavigationScreenState extends ConsumerState<MainNavigationScreen> {
       }
     });
 
+    // Watch live signaling connection state
+    final liveState = ref.watch(signalingConnectionStateProvider).value ??
+        ref.watch(signalingServiceProvider).connectionState;
+
+    final isConnecting = liveState == SignalingConnectionState.connecting ||
+        liveState == SignalingConnectionState.authenticating;
+    final isDisconnected = liveState == SignalingConnectionState.disconnected ||
+        liveState == SignalingConnectionState.error;
+
     return Scaffold(
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: _pages,
+      body: Column(
+        children: [
+          // Connection status banner when waking up Render or reconnecting
+          if (isConnecting || isDisconnected)
+            SafeArea(
+              bottom: false,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: isConnecting
+                    ? AppColors.primary.withValues(alpha: 0.2)
+                    : AppColors.callRed.withValues(alpha: 0.2),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: isConnecting
+                          ? const CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(AppColors.primaryLight),
+                            )
+                          : const Icon(
+                              Icons.wifi_off_rounded,
+                              size: 14,
+                              color: AppColors.callRed,
+                            ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        isConnecting
+                            ? 'Connecting to call server...'
+                            : 'Call server disconnected.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isConnecting ? AppColors.primaryLight : AppColors.callRed,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    if (isDisconnected)
+                      GestureDetector(
+                        onTap: () {
+                          ref.read(callProvider.notifier).connectSignaling();
+                        },
+                        child: const Text(
+                          'Retry',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.primaryLight,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: _pages,
+            ),
+          ),
+        ],
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,

@@ -13,14 +13,30 @@ class AppConstants {
   /// Backend will disconnect if auth message is not received within this window.
   static const int authTimeoutSeconds = 10;
 
-  /// Centralized ICE / STUN servers configuration for WebRTC.
-  /// Development default uses public Google STUN servers.
-  /// Replaceable at runtime or in production with TURN server credentials.
+  /// Centralized ICE / STUN + TURN servers configuration for WebRTC.
+  /// STUN alone fails on symmetric NAT (common on mobile 4G/5G networks).
+  /// TURN relays media when direct peer-to-peer is not possible.
+  /// Using OpenRelay free public TURN — replace with private TURN in production.
   static const Map<String, dynamic> defaultIceServers = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
-      {'urls': 'stun:stun2.l.google.com:19302'},
+      // Free public TURN relay (OpenRelay)
+      {
+        'urls': 'turn:openrelay.metered.ca:80',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': 'turn:openrelay.metered.ca:443',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': 'turn:openrelay.metered.ca:443?transport=tcp',
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
     ],
   };
 

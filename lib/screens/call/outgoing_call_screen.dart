@@ -75,58 +75,9 @@ class OutgoingCallScreen extends ConsumerWidget {
                 ],
               ),
 
-              // Dev Controls & End Call Action
+              // End Call Action
               Column(
                 children: [
-                  // Dev Helper Buttons for Local State Machine Testing
-                  if (callState.callState == CallState.calling || callState.callState == CallState.ringing) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        children: [
-                          const Text(
-                            '🧪 Dev Simulation Controls',
-                            style: TextStyle(fontSize: 12, color: AppColors.textSecondary, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              OutlinedButton.icon(
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppColors.callGreen,
-                                  side: const BorderSide(color: AppColors.callGreen),
-                                ),
-                                onPressed: () {
-                                  ref.read(callProvider.notifier).simulatePeerAccept();
-                                },
-                                icon: const Icon(Icons.check, size: 16),
-                                label: const Text('Peer Accept'),
-                              ),
-                              OutlinedButton.icon(
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppColors.callRed,
-                                  side: const BorderSide(color: AppColors.callRed),
-                                ),
-                                onPressed: () {
-                                  ref.read(callProvider.notifier).simulatePeerReject();
-                                },
-                                icon: const Icon(Icons.close, size: 16),
-                                label: const Text('Peer Reject'),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                  ],
-
-                  // End Call Button
                   GestureDetector(
                     onTap: () {
                       ref.read(callProvider.notifier).endCall();
